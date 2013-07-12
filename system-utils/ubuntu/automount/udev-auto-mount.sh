@@ -1,90 +1,95 @@
 #!/bin/sh
 #
 # USAGE: udev-auto-mount.sh DEVICE
-#   DEVICE   is the actual device node at /dev/DEVICE
-# 
+#   DEVICE   is the name of the block device node at /dev/DEVICE
+ 
 # This script takes a device name, looks up the partition label and
 # type, creates /media/LABEL and mounts the partition.  Mount options
-# are hard-coded below.
+# based on filesystem type are hard-coded below.
 
 DEVICE=$1
 
-# check input
+# Ensure we received input.
 if [ -z "$DEVICE" ]; then
-    exit 1
+   echo "Error: Must be called with a device name."
+   exit 1
 fi
 
-# test that this device isn't already mounted
-device_is_mounted=`grep ${DEVICE} /etc/mtab`
+# Exit if the device is already mounted.
+device_is_mounted=`mount | grep ${DEVICE}`
 if [ -n "$device_is_mounted" ]; then
-    echo "error: seems /dev/${DEVICE} is already mounted"
-    exit 1
+   echo "Error: /dev/${DEVICE} is already mounted."
+   exit 1
 fi
 
-# If there's a problem at boot-time, this is where we'd put
-# some test to check that we're booting, and then run
+# If there's a problem at boot-time, this is where we'd put some test to
+# check that we're booting, and then run
 #     sleep 60
 # so the system is ready for the mount below.
 #
-# An example to experiment with:
-# Assume the system is "booted enough" if the HTTPD server is running.
-# If it isn't, sleep for half a minute before checking again.
+# An example to experiment with: Assume the system is "booted enough" if
+# the HTTPD server is running.  If it isn't, sleep for half a minute
+# before checking again.
 #
-# The risk: if the server fails for some reason, this mount script
-# will just keep waiting for it to show up.  A better solution would
-# be to check for some file that exists after the boot process is complete.
+# The risk: if the server fails for some reason, this mount script will
+# just keep waiting for it to show up.  A better solution would be to
+# check for some file that exists after the boot process is complete.
 #
-# HTTPD_UP=`ps -ax | grep httpd | grep -v grep`
-# while [ -z "$HTTPD_UP" ]; do
-#    sleep 30
-#    HTTPD_UP=`ps -ax | grep httpd | grep -v grep`
-# done
+# HTTPD_UP=`ps -ax | grep httpd | grep -v grep` while [ -z "$HTTPD_UP"
+# ]; do sleep 30 HTTPD_UP=`ps -ax | grep httpd | grep -v grep` done
 
 
-# pull in useful variables from vol_id, quote everything Just In Case
-eval `/sbin/blkid -o udev -p /dev/${DEVICE} | sed 's/^/export /; s/=/="/; s/$/"/'`
-# kommentert ut 
-# eval `/sbin/vol_id /dev/${DEVICE} | sed 's/^/export /; s/=/="/; s/$/"/'`
+# Use blkid to pull in useful variables.
+eval `blkid -o udev /dev/${DEVICE}`
 
 if [ -z "$ID_FS_LABEL" ] || [ -z "$ID_FS_TYPE" ]; then
-    echo "error: ID_FS_LABEL is empty! did vol_id break? tried /dev/${DEVICE}"
-    exit 1
+   echo "Error: Neither ID_FS_LABEL nor ID_FS_TYPE are useful."
+   echo "       (Check 'blkid -o /dev/${DEVICE}'.)"
+   exit 1
 fi
 
 
-# test mountpoint - it shouldn't exist
-if [ ! -e "/media/${ID_FS_LABEL}" ]; then
+# Ensure the mountpoint does not exist.
+MOUNTPT="${MOUNTPT}"
+if [ ! -e "${MOUNTPT}" ]; then
 
-    # make the mountpoint
-    mkdir "/media/${ID_FS_LABEL}"
+  echo "Making mount point: ${MOUNTPT}"
+  mkdir "${MOUNTPT}"
 
-    # mount the device
-    # 
-    # If expecting thumbdrives, you probably want 
-    #      mount -t auto -o sync,noatime [...]
-    # 
-    # If drive is VFAT/NFTS, this mounts the filesystem such that all files
-    # are owned by a std user instead of by root.  Change to your user's UID
-    # (listed in /etc/passwd).  You may also want "gid=1000" and/or "umask=022", eg:
-    #      mount -t auto -o uid=1000,gid=1000 [...]
-    # 
-    # 
-    case "$ID_FS_TYPE" in
+  # If expecting thumbdrives, you probably want:
+  #    mount -t auto -o sync,noatime [...]
+  # 
+  # If drive is VFAT/NFTS, this mounts the filesystem such that all
+  # files are owned by a normal user instead of by root.  Change to your
+  # UID (run `id`).
+  #
+  # You may also want "gid=1000" and/or "umask=022":
+  #    mount -t auto -o uid=1000,gid=1000 [...]
+  # 
+  # 
+  case "$ID_FS_TYPE" in
+    vfat)  mount -t vfat -o sync,noatime,uid=1000 /dev/${DEVICE} "${MOUNTPT}"
+           ;;
 
-        vfat)  mount -t vfat -o sync,noatime,uid=1000 /dev/${DEVICE} "/media/${ID_FS_LABEL}"
-            ;;
+           # The locale setting is helpful for NTFS.
+    ntfs)  mount -t auto -o sync,noatime,uid=1000,locale=en_US.UTF-8 /dev/${DEVICE} "${MOUNTPT}"
+           ;;
 
-            # I like the locale setting for ntfs
-            ntfs)  mount -t auto -o sync,noatime,uid=1000,locale=en_US.UTF-8 /dev/${DEVICE} "/media/${ID_FS_LABEL}"
-            ;;
+           # EXT2/3/4 don't like the "uid" option.
+    ext*)  mount -t auto -o sync,noatime /dev/${DEVICE} "${MOUNTPT}"
+           ;;
 
-            # ext2/3/4 don't like uid option
-            ext*)  mount -t auto -o sync,noatime /dev/${DEVICE} "/media/${ID_FS_LABEL}"
-            ;;
-    esac
+    *)     echo "Error: Unknown filesystem type on /dev/${DEVICE}.  Consult /usr/local/sbin/udev-auto-mount.sh"
+           exit 1
+           ;;
+  esac
 
-    # all done here, return successful
-    exit 0
+  # Mount was ok, return successful.
+  exit 0
+
+else
+  echo "Error: ${MOUNTPT} unexpectedly already exists."
 fi
 
+echo "Error: Auto-mounting ${DEVICE} on ${MOUNTPT} failed."
 exit 1
